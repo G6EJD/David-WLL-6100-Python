@@ -1,0 +1,361 @@
+import math
+import time
+import requests
+import json
+from time import strftime
+from requests.adapters import HTTPAdapter, Retry
+current_conditions_url = "http://192.168.0.41/v1/current_conditions"
+
+icon           = ""
+AirPressure    = 0.0
+Temperature    = 0.0
+Humidity       = 0
+Trend          = 0
+trendTxt       = ""
+DewPoint       = 0.0
+WetBulb        = 0.0
+HeatIndex      = 0.0
+WindChill      = 0.0
+SolarRad       = 0.0
+WindSpeed      = 0.0
+WindDirection  = 0.0
+WindGust       = 0.0
+TodaysRainfall = 0.0
+
+def Zcode(msg):
+    global icon
+    if (msg == 'A'):
+        icon = "https://openweathermap.org/img/wn/01d@2x.png"
+        return "Settled fine"
+    if (msg == 'B'):
+        icon = "https://openweathermap.org/img/wn/01d@2x.png"
+        return "Fine weather"
+    if (msg == 'C'):
+        icon = "https://openweathermap.org/img/wn/02d@2x.png"
+        return "Becoming fine"
+    if (msg == 'D'):
+        icon = "https://openweathermap.org/img/wn/02d@2x.png"
+        return "Fairly Fine, becoming less settled"
+    if (msg == 'E'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Fairly Fine, possible showers"
+    if (msg == 'F'):
+        icon = "https://openweathermap.org/img/wn/02d@2x.png"
+        return "Fairly Fine, improving"
+    if (msg == 'G'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Fairly fine, possible showers early"
+    if (msg == 'H'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Fairly fine, showery later"
+    if (msg == 'I'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Showery early, improving"
+    if (msg == 'J'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Changeable, improving"
+    if (msg == 'K'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Fairly fine, showers likely"
+    if (msg == 'L'):
+        icon = "https://openweathermap.org/img/wn/04d@2x.png"
+        return "Rather unsettled clearing later"
+    if (msg == 'M'):
+        icon = "https://openweathermap.org/img/wn/04d@2x.png"
+        return "Unsettled, probably improving"
+    if (msg == 'N'):
+        icon = "https://openweathermap.org/img/wn/10d@2x.png"
+        return "Showery, bright intervals"
+    if (msg == 'O'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Showery, becoming less settled"
+    if (msg == 'P'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Changeable, some rain"
+    if (msg == 'Q'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Unsettled, short fine intervals"
+    if (msg == 'R'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Unsettled, rain later"
+    if (msg == 'S'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Unsettled, some rain"
+    if (msg == 'T'):
+        icon = "https://openweathermap.org/img/wn/04d@2x.png"
+        return "Mostly very unsettled"
+    if (msg == 'U'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Occasional rain, worsening"
+    if (msg == 'V'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Rain at times, very unsettled"
+    if (msg == 'W'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Rain at frequent intervals"
+    if (msg == 'X'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "Rain, very unsettled"
+    if (msg == 'Y'):
+        icon = "https://openweathermap.org/img/wn/11d@2x.png"
+        return "Stormy, may improve"
+    if (msg == 'Z'):
+        icon = "https://openweathermap.org/img/wn/09d@2x.png"
+        return "much rain"
+    return ""
+
+def OrdinalWindDir(dir):
+    val = int((dir / 22.5) + 0.5)
+    arr = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"]
+    return arr[(val % 16)]
+
+def WindDegToDir(dir):
+    val = int((dir / 45) + 0.5)
+    arr = ["&dArr;","&swArr;","&lArr;","&neArr;","&uArr;","&neArr;","&rArr;","&seArr;"]
+    return arr[(val % 8)]
+
+def zambretti_value(latitude, wind_dir, p_hi, p_lo, ztrend, zpress):
+    """Return local forecast number based on Zambretti Forecaster.
+       Inputs: Pressure in mB, Pressure Trend 0 for Steady, >0 for Rising and <0 for Falling
+               Latitude in Degrees, Highest Pressure in mB, Lowest Pressure in mB
+               Wind Direction in Degrees """
+    if (
+        latitude    is None
+        or wind_dir is None
+        or p_hi     is None
+        or p_lo     is None
+        or ztrend   is None
+        or zpress   is None
+    ):
+        return None
+    # Northern = 1 or Southern = 2 hemisphere
+    if latitude >= 0:
+        z_where = 1
+    else:
+        z_where = 2
+    # upper limits of your local 'weather window' Pulled from All Time Max
+    z_baro_top    = p_hi    # var z_baro_top = 1050; # upper limits of your local 'weather window' (1050.0 hPa for UK)
+    z_baro_bottom = p_lo    # var z_baro_bottom = 950;	// lower limits of your local 'weather window' (950.0 hPa for UK)
+    z_range = z_baro_top - z_baro_bottom # range of pressure
+    z_hpa = zpress        # z_hpa is Sea Level Adjusted (Relative) barometer in hPa or mB
+    z_month = int(strftime("%m")) # z_month is current month as a number between 1 to 12
+    z_season = z_month >= 4 and z_month <= 9 # True (1) for summer, False (0) for Winter (Northern Hemishere)
+    # NB. if calm a 'nonsense' value should be sent as z_wind (direction) eg. 1 or calm !
+    z_wind = OrdinalWindDir(wind_dir)
+    if WindSpeed == 0:
+        z_wind = 1
+    #print(z_wind)
+    # z_trend is barometer trend: 0 = no change, 1 = rise, -1 = fall
+    # z_trend_threshold = 0.047248 if self.unit_system == UNITS_IMPERIAL else 1.6
+    #print(ztrend)
+    if   ztrend > 0.01:  z_trend = 1
+    elif ztrend < -0.01: z_trend = -1
+    else:                z_trend = 0
+    # A constant for the current location, will vary since range will adjust as the min and max pressure will update overtime
+    z_constant = z_range / 22
+    # Equivalents of Zambretti 'dial window' letters A - Z: 0=A
+    # rise_options = [25, 25, 25, 24, 24, 19, 16, 12, 11, 9, 8, 6, 5, 2, 1, 1, 0, 0, 0, 0, 0, 0, ]
+    #steady_options = [25, 25, 25, 25, 25, 25, 23, 23, 22, 18, 15, 13, 10, 4, 1, 1, 0, 0, 0, 0, 0, 0, ]
+    #fall_options   = [25, 25, 25, 25, 25, 25, 25, 25, 23, 23, 21, 20, 17, 14, 7, 3, 1, 1, 1, 0, 0, 0, ]
+    rise_options   = [25, 25, 25, 24, 24, 19, 16, 12, 11,  9,  8,  6,  5,  2, 1, 1, 0, 0, 0, 0, 0, 0, ]
+    steady_options = [25, 25, 25, 25, 25, 25, 23, 23, 22, 18, 15, 13, 10,  4, 1, 1, 0, 0, 0, 0, 0, 0, ]
+    fall_options   = [25, 25, 25, 25, 25, 25, 25, 25, 23, 23, 21, 20, 17, 14, 7, 3, 1, 1, 1, 0, 0, 0, ]
+    if z_where == 1:
+        # North hemisphere
+        if   z_wind == "N":    z_hpa += 6   / 100 * z_range
+        elif z_wind == "NNE":  z_hpa += 5   / 100 * z_range
+        elif z_wind == "NE":   z_hpa += 5   / 100 * z_range
+        elif z_wind == "ENE":  z_hpa += 2   / 100 * z_range
+        elif z_wind == "E":    z_hpa -= 0.5 / 100 * z_range
+        elif z_wind == "ESE":  z_hpa -= 2   / 100 * z_range
+        elif z_wind == "SE":   z_hpa -= 5   / 100 * z_range
+        elif z_wind == "SSE":  z_hpa -= 8.5 / 100 * z_range
+        elif z_wind == "S":    z_hpa -= 12  / 100 * z_range
+        elif z_wind == "SSW":  z_hpa -= 10  / 100 * z_range
+        elif z_wind == "SW":   z_hpa -= 6   / 100 * z_range
+        elif z_wind == "WSW":  z_hpa -= 4.5 / 100 * z_range
+        elif z_wind == "W":    z_hpa -= 3   / 100 * z_range
+        elif z_wind == "WNW":  z_hpa -= 0.5 / 100 * z_range
+        elif z_wind == "NW":   z_hpa += 1.5 / 100 * z_range
+        elif z_wind == "NNW":  z_hpa += 3   / 100 * z_range
+        if z_season == 1: # if Summer
+            if z_trend == 1:
+                # rising
+                z_hpa += 7 / 100 * z_range
+            elif z_trend == -1:
+                # falling
+                z_hpa -= 7 / 100 * z_range
+    else:
+        # South hemisphere
+        if z_wind == "S":
+            z_hpa += 6 / 100   * z_range
+        elif z_wind == "SSW":
+            z_hpa += 5 / 100   * z_range
+        elif z_wind == "SW":
+            z_hpa += 5 / 100   * z_range
+        elif z_wind == "WSW":
+            z_hpa += 2 / 100   * z_range
+        elif z_wind == "W":
+            z_hpa -= 0.5 / 100 * z_range
+        elif z_wind == "WNW":
+            z_hpa -= 2 / 100   * z_range
+        elif z_wind == "NW":
+            z_hpa -= 5 / 100   * z_range
+        elif z_wind == "NNW":
+            z_hpa -= 8.5 / 100 * z_range
+        elif z_wind == "N":
+            z_hpa -= 12 / 100  * z_range
+        elif z_wind == "NNE":
+            z_hpa -= 10 / 100  * z_range
+        elif z_wind == "NE":
+            z_hpa -= 6 / 100   * z_range
+        elif z_wind == "ENE":
+            z_hpa -= 4.5 / 100 * z_range
+        elif z_wind == "E":
+            z_hpa -= 3 / 100   * z_range
+        elif z_wind == "ESE":
+            z_hpa -= 0.5 / 100 * z_range
+        elif z_wind == "SE":
+            z_hpa += 1.5 / 100 * z_range
+        elif z_wind == "SSE":
+            z_hpa += 3 / 100   * z_range
+        if z_season == 0:
+            # Winter
+            if z_trend == 1:
+                # rising
+                z_hpa += 7 / 100 * z_range
+            elif z_trend == -1:
+                # falling
+                z_hpa -= 7 / 100 * z_range
+        # END North / South
+
+    if z_hpa == z_baro_top:
+        z_hpa = z_baro_top - 1
+    z_option = math.floor((z_hpa - z_baro_bottom) / z_constant)
+    #print(z_hpa)
+    if z_option < 0:
+        z_option = 0
+    if z_option > 21:
+        z_option = 21
+    if z_trend == 1:   
+        z_number = rise_options[z_option]   # rising
+    elif z_trend == -1: 
+        z_number = fall_options[z_option]   # falling
+    else:               
+        z_number = steady_options[z_option] # steady
+    return z_number
+
+def zambretti_forecast(z_num: int):
+    """Return local forecast text based on Zambretti Number from the zambretti_num function.
+    Input: Zambretti Number from Zambretti function
+    Where:
+    """
+    # Zambretti Text Equivalents of Zambretti 'dial window' letters A - Z
+    z_forecast = ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
+    z_text  = ""
+    z_text += z_forecast[int(z_num)]
+    return z_text
+
+def Decode_JSON(response):
+    #print (response)
+    global AirPressure, forecast, icon, AirPressure, Trend, Temperature, Humidity
+    global DewPoint, WetBulb, HeatIndex, WindChill, SolarRad, WindSpeed, WindDirection, WindGust
+    global TodaysRainfall, trendTxt
+    AirPressure    = response['data']['conditions'][2]['bar_sea_level']*33.8638
+    Trend          = response['data']['conditions'][2]['bar_trend']
+    Temperature    = (float(response['data']['conditions'][0]['temp'])-32) * 5 / 9
+    Humidity       = int(response['data']['conditions'][0]['hum'])
+    DewPoint       = (float(response['data']['conditions'][0]['dew_point'])- 32)*5 / 9
+    WetBulb        = (float(response['data']['conditions'][0]['wet_bulb'])- 32)*5 / 9
+    HeatIndex      = (float(response['data']['conditions'][0]['heat_index'])- 32)*5 / 9
+    WindChill      = (float(response['data']['conditions'][0]['wind_chill'])- 32)*5 / 9
+    SolarRad       = int(response['data']['conditions'][0]['solar_rad'])
+    WindSpeed      = response['data']['conditions'][0]['wind_speed_last']
+    WindDirection  = response['data']['conditions'][0]['wind_dir_last']
+    WindGust       = response['data']['conditions'][0]['wind_speed_hi_last_10_min']
+    TodaysRainfall = response['data']['conditions'][0]['rainfall_daily'] * 0.2
+    trendTxt = "Steady"
+    if Trend >  0.01:
+        trendTxt = "Rising"
+    if Trend < -0.01:
+        trendTxt = "Falling"
+    print(Trend)
+    print(trendTxt)
+    print ("Temperature     =", str('% 4.1f0' % Temperature))
+    print ("Heat Index      =", str('% 4.1f' % HeatIndex))
+    print ("Dew Point       =", str('% 4.1f' % DewPoint))
+    print ("Wet Bulb        =", str('% 4.1f' % WetBulb))
+    print ("Heat Index      =", str('% 4.1f' % HeatIndex))
+    print ("Solar Radiation =", str('% 4.1f' % SolarRad))
+    print ("Pressure        =", str('% 4.1f' % AirPressure))
+    print ("Pressure Trend  =", str('% 4.2f' % Trend))
+    print ("Pressure Trend  = ", trendTxt)
+    print ("Humidity        = ", Humidity)
+    print ("Wind Speed      = ", WindSpeed)
+    print ("Wind Degrees    = ", WindDirection)
+    print ("Wind Gust       = ", WindGust)
+    print ("TodaysRainfall  = ", TodaysRainfall, "mm")
+
+def CreateHTML():
+    IconLocation = icon
+    #http://openweathermap.org/img/wn/10d@2x.png Icon location
+    Header  = "<!DOCTYPE html>"
+    Header += "<html><meta name='viewport' content='width=device-width'>"
+    Header += "<title>Weather</title>"
+    Header += "<style>"
+    Header += "body   {margin-left:auto;margin-right:auto;font-family:Arial,Helvetica,sans-serif;font-size:16px;color:blue;background-color:#e1e1ff;text-align:center;}";
+    Header += "footer {padding:0.08em;background-color:cyan;font-size:1.1em;}";
+    Header += "table  {font-family:arial,sans-serif;border-collapse:collapse;width:60%;margin: 0 auto;}"; 
+    Header += "td, th {border:1px solid #dddddd;text-align:center;padding:8px;}";
+    Header += "tr:nth-child(even) {background-color:#dddddd;}";
+    Header += "</style>"
+    Header += "</head>"
+    Header += "<body>"
+    Header += "<h3>Zambretti Weather Forecast</h3>"
+    Header += "<table>";
+    row1    = "<tr><td><img src=" + IconLocation + " width='180' height='180' alt = ""></td></tr>"
+    row1   += "<tr><td>" + forecast + "</td></tr>"
+    if (float(Temperature) < 4.0):
+        row1 += "<tr><td><span style='color:red;font-size:25px;'>" + str('% 4.1f' % Temperature) + " &deg;C</span> / <span style='color:blue;font-size:25px;'>" + str(Humidity) + "%</span></td></tr>"
+    else:
+        row1 += "<tr><td><span style='color:green;font-size:25px;'>"   + str('% 4.1f' % Temperature) + " &deg;C</span> / <span style='color:blue;font-size:25px;'>" + str(Humidity) + "%</span></td></tr>"
+    row1   += "<tr><td>Heat Index: " + str('% 4.1f' % HeatIndex) + "&deg;C / "
+    row1   += "Wind Chill: " + str('% 4.1f' % WindChill) + "&deg;C</td></tr>"
+    row1   += "<tr><td>Dew Point: " + str('% 4.1f' % DewPoint) + "&deg;C / "
+    row1   += "Wet Bulb: " + str('% 4.1f' % WetBulb) + "&deg;C</td></tr>"
+    row1   += "<tr><td>Pressure: "   + str('% 6.0f' % AirPressure) + " hpa and " + trendTxt + "</td></tr>"
+    row1   += "<tr><td>Wind: " + str(WindSpeed) + "mph, &nbsp;Gusting: " + str(WindGust) + "mph, &nbsp;" + OrdinalWindDir(WindDirection) + ", &nbsp;" + WindDegToDir(WindDirection) + " </td></tr>"
+#    row1   += "<tr><td>Wind: " + str(WindSpeed) + "mph, &nbsp;Gusting: " + str(WindGust) + "mph, &nbsp;" + OrdinalDirection(WindDirection) + " </td></tr>"    if (TodaysRainfall > 0):
+    row1 += "<tr><td>Precipitation Today: " + str("%.1f" % TodaysRainfall) + "mm</td></tr>"
+    # See http://www.cplusplus.com/reference/ctime/strftime/
+    row1   += "<tr><td>Solar Rad: " + str(SolarRad) + " W/m<sup>2</sup></td></tr>"
+    row1   += "<tr><td>Time: " + time.strftime("%H:%M") + "</td></tr>"
+    row1   += "<tr><td>Date: " + time.strftime("%d-%m-%Y") + "</td></tr>"
+    row1   += "</table>"
+    row1   += "</body></html>"
+    page = Header + row1
+    file = open("/var/www/html/ZambrettiWx.html", "w")
+    #file = open("ZambrettiWx.html", "w")
+    if not file: print("File not accessible")
+    file.write(page)
+    file.close()
+    print ("*** Finished ***")
+
+def make_request_using_socket(url):
+    session = requests.Session()
+    retries = Retry(total = 8, backoff_factor = 1, status_forcelist = [502, 503, 504])
+    session.mount('http://', HTTPAdapter(max_retries = retries))
+    resp = session.get(url)
+    json_data = json.loads(resp.text)
+    if json_data["data"] == None:
+        print (json_data["error"])
+    Decode_JSON(json_data)
+             
+make_request_using_socket(current_conditions_url)
+# zambretti_value(self, latitude, wind_dir, p_hi, p_lo, trend, press):
+#print("Zambretti Code=", zambretti_forecast(zambretti_value(51, WindDirection, 1050, 950, Trend, AirPressure)))
+#print(Zcode(zambretti_forecast(zambretti_value(51, WindDirection, 1050, 950, Trend, AirPressure))))
+forecast = Zcode(zambretti_forecast(zambretti_value(51, WindDirection, 1050, 950, Trend, AirPressure)))
+print(forecast)
+#print(icon)
+CreateHTML()
