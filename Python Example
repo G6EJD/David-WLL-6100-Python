@@ -4,5 +4,6 @@ def make_request_using_socket(url):
     session.mount('http://', HTTPAdapter(max_retries=retries))
     resp = session.get(url)
     json_data = json.loads(resp.text)
-    if json_data["data"] == None: print (json_data["error"])
+    if json_data["data"] == None:
+        print (json_data["error"])
     Decode_JSON(json_data)
